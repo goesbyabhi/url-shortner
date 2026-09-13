@@ -6,6 +6,8 @@ and rate limiting — plus a UI and a document explaining every tradeoff.
 
 **Stack:** Express (TypeScript) · PostgreSQL · Redis · React (Vite, TypeScript)
 
+[![CI](https://github.com/goesbyabhi/url-shortner/actions/workflows/ci.yml/badge.svg)](https://github.com/goesbyabhi/url-shortner/actions/workflows/ci.yml)
+
 ---
 
 ## Quickstart
@@ -21,9 +23,16 @@ npm run dev               # api on :3000, web on :5173
 Open **http://localhost:5173**. Short URLs resolve at `http://localhost:3000/:code`.
 
 ```bash
-npm test        # server unit tests (base62, validation)
-npm run typecheck
+npm test                  # server unit tests (base62, validation)
+npm run typecheck         # both workspaces
+bash scripts/e2e.sh       # end-to-end suite against a running api (needs curl + jq)
 ```
+
+CI (`.github/workflows/ci.yml`) runs three jobs on every push/PR:
+**unit tests + typecheck + client build**, an **end-to-end job** that boots
+the API against real Postgres/Redis service containers and asserts the
+full lifecycle (shorten → 302s → stats → 409 → 410 → 400 → 404 → 429),
+and a **docker job** that proves both production images build.
 
 ---
 
@@ -220,6 +229,39 @@ vars the compose file sets. Serve the client from any static host and
 proxy `/api` + short codes to the service, or put nginx in front as
 `compose.prod.yml` does.
 
+### Free-tier cloud (no VPS)
+
+Fully free, credit-card-less deployment: **Render** (API) + **Neon**
+(Postgres) + **Upstash** (Redis) + **Cloudflare Pages** (SPA). The only
+app changes needed are env vars — `PGSSL=true` for Neon's TLS,
+`CORS_ORIGIN` set to your Pages domain, `VITE_API_URL` baked into the SPA
+build, and `BASE_URL` as the public API origin (it stamps short URLs).
+
+1. **Neon** — create a project, copy the connection params into the
+   Render env vars (`PGSSL=true`).
+2. **Upstash** — create a database, copy the `rediss://…` URL into
+   `REDIS_URL`.
+3. **Render** — New → Blueprint → pick this repo. `render.yaml` defines
+   the service; set the `sync: false` values after the first deploy.
+   Free services sleep after ~15 min idle — the first request pays a
+   ~30-60s cold start. Short URLs resolve on the API origin
+   (`https://snip-api.onrender.com/abc1234`).
+4. **Cloudflare Pages** — build the SPA with the API origin baked in:
+
+   ```bash
+   VITE_API_URL=https://snip-api.onrender.com npm run build -w client
+   npx wrangler pages deploy client/dist --project-name snip
+   ```
+
+   Then set Render's `CORS_ORIGIN` to the returned `*.pages.dev` origin.
+
+**Why not all-Cloudflare?** Workers can't run this Express app as-is —
+`pg` would need [Hyperdrive](https://developers.cloudflare.com/hyperdrive/)
+and `ioredis` has no Workers-compatible transport (you'd use Workers KV
+or Durable Objects for cache + rate limiting instead). That's a rewrite
+of `server/src` to something like Hono — same design, different runtime —
+and a fine stretch goal, but not a config change.
+
 ---
 
 ## Project layout
@@ -238,7 +280,8 @@ url-shortner/
 │  ├─ Dockerfile        # build → nginx (SPA + reverse proxy)
 │  ├─ nginx.conf        # serves the SPA, proxies /api and /:code
 │  └─ src/components/   # form, result, recents (localStorage), stats chart
-├─ scripts/             # deploy.ps1 / deploy.sh — run compose.prod.yml
+├─ scripts/             # deploy.ps1 / deploy.sh, e2e.sh
+├─ render.yaml           # free-tier cloud blueprint (Render)
 ├─ compose.prod.yml     # postgres + redis + api + nginx, health-gated
 └─ docker-compose.yml   # dev infra only (postgres + redis)
 ```
@@ -249,12 +292,15 @@ Recent links live in `localStorage` — the demo has no user accounts by design.
 
 ## Verification
 
-- `npm run typecheck` + `npm test` pass for both workspaces
-- End-to-end script exercised: shorten → redirect ×2 (cache hit) → stats
-  (3 clicks recorded) → custom alias (201) → duplicate alias (409) →
-  alias redirect → 2s-expiry link (302 → `410` after deadline, row swept) →
+- `npm run typecheck` passes for both workspaces; `npm test` covers the server libs
+- The end-to-end suite (`scripts/e2e.sh`, run in CI on every push) exercises:
+  shorten → redirect ×2 (cache hit) → stats (3 clicks recorded) →
+  custom alias (201) → duplicate alias (409) → alias redirect →
+  2s-expiry link (302 → `410` after deadline, row swept) →
   invalid URL (400) → unknown code (404) → 40 rapid requests (rate limiter
   trips with `429`)
+- The production images build cleanly in CI, and the stack was verified
+  end-to-end through nginx before the first release
 
 Every number in this README is either a default in `server/src/config.ts`
 or derived in `server/src` — the code is the source of truth.

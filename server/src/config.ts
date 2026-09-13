@@ -22,7 +22,14 @@ export const config = {
     password: str("PGPASSWORD", "shortener"),
     database: str("PGDATABASE", "shortener"),
     max: 10,
+    ssl: str("PGSSL", "false") === "true", // required by hosted postgres (neon, supabase, …)
   },
+
+  // Comma-separated allowlist; "*" opens it to any origin
+  corsOrigins: str("CORS_ORIGIN", "http://localhost:5173,http://127.0.0.1:5173")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 
   redisUrl: str("REDIS_URL", "redis://localhost:6379"),
 

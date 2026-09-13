@@ -1,0 +1,30 @@
+# Render blueprint — deploys the API as a free-tier Docker web service.
+# Pair with: Neon (free Postgres), Upstash (free Redis), Cloudflare Pages (free SPA).
+# "sync: false" values are set in the Render dashboard after the first deploy.
+services:
+  - type: web
+    name: snip-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: BASE_URL
+        value: https://snip-api.onrender.com
+      - key: CORS_ORIGIN
+        sync: false # your Cloudflare Pages origin
+      - key: PGHOST
+        sync: false # neon hostname
+      - key: PGPORT
+        value: "5432"
+      - key: PGUSER
+        sync: false
+      - key: PGPASSWORD
+        sync: false
+      - key: PGDATABASE
+        sync: false
+      - key: PGSSL
+        value: "true" # neon requires TLS
+      - key: REDIS_URL
+        sync: false # upstash rediss://… URL

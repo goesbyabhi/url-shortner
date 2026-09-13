@@ -8,6 +8,10 @@ export class ApiError extends Error {
   }
 }
 
+// Same-origin by default (vite dev proxy / nginx prod); set VITE_API_URL at build
+// time when the SPA and API live on different origins (e.g. Cloudflare Pages).
+const API_BASE = (import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "");
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
@@ -26,9 +30,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function shorten(payload: ShortenPayload): Promise<ShortenResponse> {
-  return request<ShortenResponse>("/api/shorten", { method: "POST", body: JSON.stringify(payload) });
+  return request<ShortenResponse>(`${API_BASE}/api/shorten`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getStats(code: string): Promise<LinkStats> {
-  return request<LinkStats>(`/api/stats/${encodeURIComponent(code)}`);
+  return request<LinkStats>(`${API_BASE}/api/stats/${encodeURIComponent(code)}`);
 }
