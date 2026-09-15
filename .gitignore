@@ -10,3 +10,4 @@ Thumbs.db
 .vite/
 .wrangler/
 *.local.ps1
+session-ses_*.md
