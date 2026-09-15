@@ -119,7 +119,13 @@ Check "deleting a missing link returns 404" ($again -eq '404')
 $stillListed = @((curl.exe -s -H $auth "$base/api/links?limit=50" | ConvertFrom-Json).links | Where-Object { $_.code -eq $delCode }).Count
 Check "deleted link is gone from the listing" ($stillListed -eq 0)
 
-# --- 10. rate limiter ---------------------------------------------------------
+# --- 10. CORS: a browser on another origin must be able to call the API -------
+$corsRaw = curl.exe -s -D - -o NUL -X OPTIONS "$base/api/shorten" -H "Origin: http://localhost:5173" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: authorization,content-type"
+$corsAcao = ($corsRaw | Select-String -Pattern "access-control-allow-origin").Line
+$corsStatus = ($corsRaw | Select-String -Pattern "^HTTP" | Select-Object -First 1).Line
+Check "CORS preflight allows a browser origin ($($corsStatus -replace 'HTTP/\d\.\d ',''))" ($null -ne $corsAcao -and $corsStatus -match '200|204')
+
+# --- 11. rate limiter ---------------------------------------------------------
 $seen = 0
 for ($i = 0; $i -lt 40; $i++) {
   $code429 = curl.exe -s -o NUL -w "%{http_code}" -X POST "$base/api/shorten" -H $auth -H "Content-Type: application/json" -d '{\"url\":\"https://example.com/rate-test\"}'

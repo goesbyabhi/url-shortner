@@ -154,7 +154,17 @@ check "deleting a missing link returns 404" "$rc"
 rc=1; [ "$(curl -s -H "$AUTH" "$base/api/links?limit=50" | jq -r --arg c "$del_code" '[.links[].code | select(. == $c)] | length')" = "0" ] && rc=0
 check "deleted link is gone from the listing" "$rc"
 
-# --- 10. rate limiter -------------------------------------------------------------
+# --- 10. CORS: a browser on another origin must be able to call the API --------
+# (the SPA origin for local dev; the Worker allows it via CORS_ORIGIN)
+cors_headers=$(curl -s -D - -o /dev/null -X OPTIONS "$base/api/shorten" \
+  -H "Origin: http://localhost:5173" -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: authorization,content-type" | tr -d '\r')
+cors_acao=$(echo "$cors_headers" | awk -F': ' 'tolower($1)=="access-control-allow-origin" {print $2}')
+cors_status=$(echo "$cors_headers" | head -1 | awk '{print $2}')
+rc=1; { [ -n "$cors_acao" ] && [ "$cors_status" = "204" -o "$cors_status" = "200" ]; } && rc=0
+check "CORS preflight allows a browser origin ($cors_status, ACAO=$cors_acao)" "$rc"
+
+# --- 11. rate limiter -------------------------------------------------------------
 seen=0
 for i in $(seq 1 40); do
   st=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/shorten" -H "$AUTH" \
