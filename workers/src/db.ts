@@ -112,8 +112,14 @@ export async function getStats(client: pg.Client, code: string): Promise<LinkSta
   };
 }
 
-export async function deleteLink(client: pg.Client, code: string): Promise<void> {
-  await client.query("DELETE FROM links WHERE code = $1", [code]);
+/**
+ * Delete a link (its click_events cascade). Returns whether a row existed so
+ * callers can tell 404 from a successful delete. Also used by the expiry path,
+ * which ignores the result.
+ */
+export async function deleteLink(client: pg.Client, code: string): Promise<boolean> {
+  const r = await client.query("DELETE FROM links WHERE code = $1", [code]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 /** Cron-triggered sweep; lazy deletion at redirect time handles the rest. */

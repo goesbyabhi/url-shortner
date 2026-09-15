@@ -2,17 +2,14 @@ import { useState } from "react";
 import { LinksList } from "./components/LinksList";
 import { ResultCard } from "./components/ResultCard";
 import { ShortenForm } from "./components/ShortenForm";
-import { StatsPanel } from "./components/StatsPanel";
 import type { ShortenResponse } from "./types";
 
 export default function App() {
   const [result, setResult] = useState<ShortenResponse | null>(null);
-  const [statsCode, setStatsCode] = useState<string | null>(null);
   const [linksRefreshKey, setLinksRefreshKey] = useState(0);
 
   function handleSuccess(r: ShortenResponse) {
     setResult(r);
-    setStatsCode(null);
     setLinksRefreshKey((k) => k + 1);
   }
 
@@ -37,14 +34,8 @@ export default function App() {
         </section>
 
         <section className="section">
-          <LinksList refreshKey={linksRefreshKey} onStats={setStatsCode} />
+          <LinksList refreshKey={linksRefreshKey} />
         </section>
-
-        {statsCode && (
-          <section className="section">
-            <StatsPanel code={statsCode} onClose={() => setStatsCode(null)} />
-          </section>
-        )}
       </main>
 
       <footer className="site-footer">

@@ -1,5 +1,7 @@
 import { Hono } from "hono";
-import { listLinks, withClient } from "../db";
+import { isValidCode } from "@snip/shared";
+import { deleteLink, listLinks, withClient } from "../db";
+import { invalidateCachedLink } from "../lib/cache";
 import type { Env } from "../env";
 
 export const linksRoutes = new Hono<{ Bindings: Env }>();
@@ -32,4 +34,19 @@ linksRoutes.get("/links", async (c) => {
     ...page,
     links: page.links.map((l) => ({ ...l, shortUrl: `${origin}/${l.code}` })),
   });
+});
+
+/**
+ * DELETE /api/links/:code — remove a link and stop it resolving immediately.
+ * Cache invalidation is required, or the edge keeps serving the redirect.
+ */
+linksRoutes.delete("/links/:code", async (c) => {
+  const code = c.req.param("code");
+  if (!isValidCode(code)) return c.json({ error: "not found" }, 404);
+
+  const deleted = await withClient(c.env, (client) => deleteLink(client, code));
+  await invalidateCachedLink(code);
+
+  if (!deleted) return c.json({ error: "no link found for that code" }, 404);
+  return c.body(null, 204);
 });

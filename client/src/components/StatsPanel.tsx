@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getStats } from "../api";
 import { CloseIcon, RefreshIcon } from "../lib/icons";
 import { formatExpiry, referrerLabel, timeAgo, truncateMiddle } from "../lib/format";
@@ -27,6 +27,13 @@ function buildDays(byDay: { day: string; clicks: number }[]): { day: string; cli
 export function StatsPanel({ code, onClose }: { code: string; onClose: () => void }) {
   const [state, setState] = useState<State>({ phase: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Expanding a row can push the panel below the fold — bring it into view,
+  // but only as far as needed: "nearest" avoids scroll-jacking the page.
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,7 +60,7 @@ export function StatsPanel({ code, onClose }: { code: string; onClose: () => voi
   }, []);
 
   return (
-    <div className="stats-panel">
+    <div className="stats-panel" ref={panelRef}>
       <div className="stats-head">
         <span className="stats-code">/{code}</span>
         <span className="stats-actions">

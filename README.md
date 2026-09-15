@@ -55,6 +55,7 @@ proves both production images build.
 | GET    | `/:code`              | —                                                | `302` redirect | `404` unknown, `410` expired |
 | GET    | `/api/stats/:code`    | —                                                | `200`   | `404` |
 | GET    | `/api/links`          | `?limit=20&cursor=`                              | `200`   | `400` bad cursor |
+| DELETE | `/api/links/:code`    | —                                                | `204`   | `404` |
 | GET    | `/api/health`         | —                                                | `200`   | `503` |
 
 Rate limiting applies only to `POST /api/shorten` — **30 requests / 60s / IP**,
@@ -186,11 +187,16 @@ about this design changes when you add that.
 
 Related smaller tradeoffs:
 
-- **No delete endpoint.** Unauthenticated deletion would let anyone destroy any link; delete
-  belongs behind the same auth as the listing.
+- **Delete exists (`DELETE /api/links/:code`) and is the sharpest example of the auth
+  problem** — until it's account-scoped, anyone can destroy anyone else's link. One
+  implementation detail is not optional: deleting must invalidate the cache as well, or the
+  short code keeps redirecting until its TTL expires.
 - **Shortening the same URL twice creates two links.** Deliberate: it keeps `POST /api/shorten`
   idempotent-free and stateless. A "return the existing code for an identical URL" lookup is
   the alternative, at the cost of a hot-row lookup per write.
+- **Rate limiting covers writes only** (`POST /api/shorten`). Reads — redirects, stats, the
+  listing — are unmetered, which is the right default for a read-heavy shortener but does
+  leave the listing open to scraping. Account scoping (above) is the real fix.
 
 ---
 

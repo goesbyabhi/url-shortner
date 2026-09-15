@@ -55,29 +55,47 @@ Check "invalid url rejected 400" ($bad -eq '400')
 $miss = curl.exe -s -o NUL -w "%{http_code}" "$base/zzzzzzz"
 Check "unknown code 404" ($miss -eq '404')
 
-# --- 8. rate limiter ---------------------------------------------------------
-$seen = 0
-for ($i = 0; $i -lt 40; $i++) {
-  $code429 = curl.exe -s -o NUL -w "%{http_code}" -X POST "$base/api/shorten" -H "Content-Type: application/json" -d '{\"url\":\"https://example.com/rate-test\"}'
-  if ($code429 -eq '429') { $seen++ }
-}
-Check "rate limiter trips (429 seen $seen)" ($seen -gt 0)
-
-# --- 9. link listing + keyset pagination -------------------------------------
-$listing = curl.exe -s "$base/api/links?limit=5" | ConvertFrom-Json
-Check "GET /api/links returns a page (n=$($listing.links.Count) of $($listing.total))" ($listing.links.Count -ge 1 -and $listing.links.Count -le 5 -and $listing.total -ge $listing.links.Count)
+# --- 8. link listing + keyset pagination -------------------------------------
+# limit=2 so pagination is exercised even on a fresh database
+$listing = curl.exe -s "$base/api/links?limit=2" | ConvertFrom-Json
+Check "GET /api/links returns a page (n=$($listing.links.Count) of $($listing.total))" ($listing.links.Count -ge 1 -and $listing.links.Count -le 2 -and $listing.total -ge $listing.links.Count)
 $firstCode = $listing.links[0].code
 Check "newest link is first ($firstCode)" ($null -ne $firstCode)
 
 if ($null -ne $listing.nextCursor) {
-  $page2 = curl.exe -s "$base/api/links?limit=5&cursor=$($listing.nextCursor)" | ConvertFrom-Json
+  $page2 = curl.exe -s "$base/api/links?limit=2&cursor=$($listing.nextCursor)" | ConvertFrom-Json
   Check "cursor pagination returns the next page (n=$($page2.links.Count))" ($page2.links.Count -ge 1)
+  Check "total is only counted on the first page" ($null -eq $page2.total)
   $overlap = @($page2.links | Where-Object { $_.code -eq $firstCode }).Count
   Check "pages do not overlap" ($overlap -eq 0)
 }
 
 $badCursor = curl.exe -s -o NUL -w "%{http_code}" "$base/api/links?cursor=abc"
 Check "invalid cursor rejected 400" ($badCursor -eq '400')
+
+# --- 9. delete ----------------------------------------------------------------
+$delAlias = "del-test-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+$delBody = "{\`"url\`":\`"https://example.com/to-delete\`",\`"customAlias\`":\`"$delAlias\`"}"
+$delCode = (curl.exe -s -X POST "$base/api/shorten" -H "Content-Type: application/json" -d $delBody | ConvertFrom-Json).code
+$before = curl.exe -s -o NUL -w "%{http_code}" "$base/$delCode"
+$deleted = curl.exe -s -o NUL -w "%{http_code}" -X DELETE "$base/api/links/$delCode"
+$after = curl.exe -s -o NUL -w "%{http_code}" "$base/$delCode"
+$afterStats = curl.exe -s -o NUL -w "%{http_code}" "$base/api/stats/$delCode"
+Check "delete: 302 -> DELETE 204 -> 404 (cache invalidated)" ($before -eq '302' -and $deleted -eq '204' -and $after -eq '404' -and $afterStats -eq '404')
+
+$again = curl.exe -s -o NUL -w "%{http_code}" -X DELETE "$base/api/links/$delCode"
+Check "deleting a missing link returns 404" ($again -eq '404')
+
+$stillListed = @((curl.exe -s "$base/api/links?limit=50" | ConvertFrom-Json).links | Where-Object { $_.code -eq $delCode }).Count
+Check "deleted link is gone from the listing" ($stillListed -eq 0)
+
+# --- 10. rate limiter ----------------------------------------------------------
+$seen = 0
+for ($i = 0; $i -lt 40; $i++) {
+  $code429 = curl.exe -s -o NUL -w "%{http_code}" -X POST "$base/api/shorten" -H "Content-Type: application/json" -d '{\"url\":\"https://example.com/rate-test\"}'
+  if ($code429 -eq '429') { $seen++ }
+}
+Check "rate limiter trips (429 seen $seen)" ($seen -gt 0)
 
 Write-Output ""
 if ($fail -eq 0) { Write-Output "ALL CHECKS PASSED"; exit 0 } else { Write-Output "$fail CHECK(S) FAILED"; exit 1 }

@@ -100,9 +100,14 @@ export async function getStats(code: string): Promise<LinkStats | null> {
   };
 }
 
-/** Eagerly delete an expired link (events cascade). Complements the periodic sweep. */
-export async function deleteLink(code: string): Promise<void> {
-  await query("DELETE FROM links WHERE code = $1", [code]);
+/**
+ * Delete a link (its click_events cascade). Returns whether a row existed so
+ * callers can tell 404 from a successful delete. Also used by the expiry path,
+ * which ignores the result.
+ */
+export async function deleteLink(code: string): Promise<boolean> {
+  const r = await query("DELETE FROM links WHERE code = $1", [code]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 /** Periodic sweep: remove expired links so lookups and stats stay clean. */

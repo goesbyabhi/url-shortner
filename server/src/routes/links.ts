@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { isValidCode } from "@snip/shared";
 import { config } from "../config.js";
-import { listLinks } from "../db/links.js";
+import { deleteLink, listLinks } from "../db/links.js";
+import { invalidateCachedLink } from "../lib/cache.js";
 
 export const linksRouter: Router = Router();
 
@@ -34,6 +36,30 @@ linksRouter.get("/links", async (req, res, next) => {
       ...page,
       links: page.links.map((l) => ({ ...l, shortUrl: `${config.baseUrl}/${l.code}` })),
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * DELETE /api/links/:code — remove a link and stop it resolving immediately.
+ *
+ * Cache invalidation is not optional: without it the short code keeps
+ * redirecting from cache until its TTL expires.
+ *
+ * Unauthenticated, like the listing — in a real product this must sit behind
+ * the same account scoping, or anyone can delete anyone's links.
+ */
+linksRouter.delete("/links/:code", async (req, res, next) => {
+  try {
+    const code = req.params.code;
+    if (!isValidCode(code)) return res.status(404).json({ error: "not found" });
+
+    const deleted = await deleteLink(code);
+    await invalidateCachedLink(code);
+
+    if (!deleted) return res.status(404).json({ error: "no link found for that code" });
+    return res.status(204).end();
   } catch (err) {
     next(err);
   }

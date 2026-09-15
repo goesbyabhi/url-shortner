@@ -45,3 +45,7 @@ export function listLinks(limit = 20, cursor?: number): Promise<LinksPage> {
   if (cursor !== undefined) params.set("cursor", String(cursor));
   return request<LinksPage>(`${API_BASE}/api/links?${params.toString()}`);
 }
+
+export function deleteLink(code: string): Promise<void> {
+  return request<void>(`${API_BASE}/api/links/${encodeURIComponent(code)}`, { method: "DELETE" });
+}
