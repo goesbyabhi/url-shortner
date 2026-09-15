@@ -1,15 +1,19 @@
 import { Router } from "express";
+import { randomCode } from "../lib/base62.js";
+import { validateAlias, validateExpiresInSeconds, validateUrl } from "../lib/validate.js";
 import { config } from "../config.js";
 import { codeExists, insertLink } from "../db/links.js";
-import { randomCode } from "../lib/base62.js";
+import { requireAuth } from "../lib/auth.js";
 import { setCachedLink } from "../lib/cache.js";
 import { rateLimitMiddleware } from "../lib/ratelimit.js";
-import { validateAlias, validateExpiresInSeconds, validateUrl } from "../lib/validate.js";
 
 export const shortenRouter: Router = Router();
 
-shortenRouter.post("/shorten", rateLimitMiddleware, async (req, res, next) => {
+// Rate limit first (cheap Redis counter) so unauthenticated floods don't reach
+// the key lookup, then resolve the owner.
+shortenRouter.post("/shorten", rateLimitMiddleware, requireAuth, async (req, res, next) => {
   try {
+    const ownerId = req.ownerId!;
     const body = (req.body ?? {}) as Record<string, unknown>;
 
     const url = validateUrl(body.url);
@@ -31,7 +35,7 @@ shortenRouter.post("/shorten", rateLimitMiddleware, async (req, res, next) => {
         return res.status(409).json({ error: "that alias is already taken" });
       }
       try {
-        await insertLink({ code: alias.alias, url: url.url, isCustom: true, expiresAt });
+        await insertLink({ code: alias.alias, url: url.url, isCustom: true, expiresAt, ownerId });
       } catch (err) {
         if (isUniqueViolation(err)) return res.status(409).json({ error: "that alias is already taken" });
         throw err;
@@ -43,7 +47,7 @@ shortenRouter.post("/shorten", rateLimitMiddleware, async (req, res, next) => {
     for (let attempt = 0; attempt < config.codeGenAttempts; attempt++) {
       const code = randomCode(config.codeLength);
       try {
-        await insertLink({ code, url: url.url, isCustom: false, expiresAt });
+        await insertLink({ code, url: url.url, isCustom: false, expiresAt, ownerId });
         return void send(res, code, url.url, expiresAt);
       } catch (err) {
         if (!isUniqueViolation(err)) throw err;

@@ -38,14 +38,20 @@ and a **docker job** that proves both production images build.
 
 ## API
 
-| Method | Path                  | Body / Params                                    | Success | Errors |
-| ------ | --------------------- | ------------------------------------------------ | ------- | ------ |
-| POST   | `/api/shorten`        | `{url, customAlias?, expiresInSeconds?}`         | `201`   | `400` invalid input, `409` alias taken, `429` rate limited |
-| GET    | `/:code`              | —                                                | `302` redirect | `404` unknown, `410` expired |
-| GET    | `/api/stats/:code`    | —                                                | `200`   | `404` |
-| GET    | `/api/links`          | `?limit=20&cursor=`                              | `200`   | `400` bad cursor |
-| DELETE | `/api/links/:code`    | —                                                | `204`   | `404` |
-| GET    | `/api/health`         | —                                                | `200`   | `503` |
+| Method | Path                  | Auth | Body / Params                            | Success | Errors |
+| ------ | --------------------- | ---- | ---------------------------------------- | ------- | ------ |
+| POST   | `/api/keys`           | —    | —                                        | `201`   | `429` rate limited |
+| POST   | `/api/shorten`        | key  | `{url, customAlias?, expiresInSeconds?}` | `201`   | `400` invalid input, `401`, `409` alias taken, `429` rate limited |
+| GET    | `/:code`              | —    | —                                        | `302` redirect | `404` unknown, `410` expired |
+| GET    | `/api/stats/:code`    | key  | —                                        | `200`   | `401`, `404` |
+| GET    | `/api/links`          | key  | `?limit=20&cursor=`                      | `200`   | `400` bad cursor, `401` |
+| DELETE | `/api/links/:code`    | key  | —                                        | `204`   | `401`, `404` |
+| GET    | `/api/health`         | —    | —                                        | `200`   | `503` |
+
+`key` means `Authorization: Bearer <token>`. Get a token from `POST /api/keys`; the
+token is returned once and only its SHA-256 hash is stored. Redirects and health are
+public — a short link is shareable by design — but everything that touches *your*
+links requires your key. See design decision #7.
 
 Rate limiting applies only to `POST /api/shorten` — **30 requests / 60s / IP**,
 enforced by a Redis fixed-window counter. Responses carry `X-RateLimit-*` headers;
@@ -163,24 +169,44 @@ per-day and referrer aggregations.
   and **count the total only on the first page** — an unconditional `COUNT(*)` per page is an
   O(n) scan on every request, trivial to abuse.
 
-**The smell:** the endpoint is unauthenticated, so anyone can enumerate every link ever
-created — a privacy and abuse problem, not a feature. At this scale it's a demo convenience
-(page size capped at 50, link metadata only, no click data). A real product must scope the
-query to the caller — an account id or API key on the `WHERE` clause — and nothing else
-about this design changes when you add that.
+**Scope it to the caller.** An unauthenticated listing lets anyone enumerate every link ever
+created. The fix — decision #7 — is an owner id on the `WHERE` clause; nothing else about the
+pagination design changes when you add it.
 
 Related smaller tradeoffs:
 
-- **Delete exists (`DELETE /api/links/:code`) and is the sharpest example of the auth
-  problem** — until it's account-scoped, anyone can destroy anyone else's link. One
-  implementation detail is not optional: deleting must invalidate the cache as well, or the
-  short code keeps redirecting until its TTL expires.
+- **Delete (`DELETE /api/links/:code`) is owner-scoped too, and 404s rather than 403s.**
+  Answering 403 for someone else's link would confirm the code exists; 404 keeps the endpoint
+  useless as a probe. Cache invalidation on delete is not optional either, or the short code
+  keeps redirecting until its TTL expires.
 - **Shortening the same URL twice creates two links.** Deliberate: it keeps `POST /api/shorten`
   idempotent-free and stateless. A "return the existing code for an identical URL" lookup is
   the alternative, at the cost of a hot-row lookup per write.
-- **Rate limiting covers writes only** (`POST /api/shorten`). Reads — redirects, stats, the
-  listing — are unmetered, which is the right default for a read-heavy shortener but does
-  leave the listing open to scraping. Account scoping (above) is the real fix.
+- **Rate limiting covers writes only** (`POST /api/shorten` and `POST /api/keys`). Reads
+  through a valid key — redirects, stats, the listing — are unmetered, the right default for a
+  read-heavy shortener now that listings can't be enumerated anonymously. Redirects stay
+  public: a short link is shareable.
+
+### 7. Auth scoping — anonymous keys, hashed at rest
+
+Listing, stats, and delete are owner-only. Instead of building accounts (email, passwords,
+reset flows) for a demo, the app mints an **anonymous API key** on first use and keeps it in
+the browser; every endpoint that touches *your* links requires it.
+
+- **Only the hash is stored.** `api_keys.token_hash = sha256(token)`. The token is 256 bits
+  from `crypto.randomBytes`, so one fast hash is the right tool — salts and slow KDFs exist to
+  defend low-entropy human passwords, not random keys.
+- **Keys are principals, not sessions.** No expiry or refresh machinery: revoking a key means
+  deleting its row, and `ON DELETE CASCADE` takes that key's links with it.
+- **404, never 403.** A link that exists but belongs to someone else is indistinguishable from
+  one that doesn't, so the API cannot be used to probe which codes exist.
+- **One indexed lookup per authenticated request.** Caching hash → owner (Redis) is the next
+  optimization when the auth path gets hot, paid for with cache invalidation on revocation.
+- **Legacy rows** created before auth have `owner_id IS NULL`: they still redirect, but no key
+  owns them, so they never appear in a listing and cannot be deleted through the API.
+- **The cost of no signup:** clearing site data loses the key — and with it, access to your
+  links. They keep resolving; you just can't list or delete them. That is the honest price of
+  skipping accounts, and why a real product would offer real logins or key export.
 
 ---
 
@@ -323,12 +349,14 @@ that endpoint the one genuine design smell in the project — see design decisio
 ## Verification
 
 - `npm run typecheck` passes for both workspaces; `npm test` covers the server libs
-- The e2e suite (`scripts/e2e.sh` in CI, `scripts/e2e.ps1` on Windows) covers 23 checks:
-  shorten → redirect ×2 (cache hit) → stats (3 clicks recorded) → custom alias (201) →
-  duplicate alias (409) → alias redirect → 2s-expiry link (302 → `410` after deadline, row
-  swept) → invalid URL (400) → unknown code (404) → listing + keyset pagination (`total`
-  only on the first page, no page overlap, invalid cursor 400) → delete (302 → `204` → `404`,
-  gone from the listing, second delete 404) → 40 rapid requests (rate limiter trips with `429`)
+- The e2e suite (`scripts/e2e.sh` in CI, `scripts/e2e.ps1` on Windows) covers 31 checks:
+  key issuance + 401s → shorten → redirect ×2 (cache hit) → stats (3 clicks recorded) →
+  custom alias (201) → duplicate alias (409) → alias redirect → 2s-expiry link (302 → `410`
+  after deadline, row swept) → invalid URL (400) → unknown code (404) → listing + keyset
+  pagination (`total` only on the first page, no page overlap, invalid cursor 400) →
+  **cross-key isolation** (a second key can't list, read stats for, or delete the link, and it
+  still resolves) → owner delete (302 → `204` → `404`, gone from the listing, second delete
+  404) → rate limiter (429)
 - The production images build cleanly in CI, and the stack was verified
   end-to-end through nginx before the first release
 

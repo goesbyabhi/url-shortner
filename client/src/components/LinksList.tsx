@@ -88,7 +88,7 @@ export function LinksList({ refreshKey }: { refreshKey: number }) {
   return (
     <>
       <div className="section-head">
-        <h2>All links</h2>
+        <h2>Your links</h2>
         <span className="list-meta mono muted">
           {loading && links.length === 0 ? "loading…" : `${total} total`}
           <button
@@ -107,7 +107,10 @@ export function LinksList({ refreshKey }: { refreshKey: number }) {
       {loading && links.length === 0 && !error && <div className="skeleton list-block" />}
 
       {!loading && !error && links.length === 0 && (
-        <p className="empty">Nothing here yet — shorten a link above and it shows up in this list.</p>
+        <p className="empty">
+          Nothing here yet. Links you shorten are tied to this browser's anonymous key, so they show up in this
+          list and nowhere else.
+        </p>
       )}
 
       {links.length > 0 && (
