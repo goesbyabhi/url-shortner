@@ -8,3 +8,4 @@ dist/
 Thumbs.db
 *.log
 .vite/
+.wrangler/

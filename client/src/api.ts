@@ -1,4 +1,4 @@
-import type { LinkStats, ShortenPayload, ShortenResponse } from "./types";
+import type { LinkStats, LinksPage, ShortenPayload, ShortenResponse } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -38,4 +38,14 @@ export function shorten(payload: ShortenPayload): Promise<ShortenResponse> {
 
 export function getStats(code: string): Promise<LinkStats> {
   return request<LinkStats>(`${API_BASE}/api/stats/${encodeURIComponent(code)}`);
+}
+
+export function listLinks(limit = 20, cursor?: number): Promise<LinksPage> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (cursor !== undefined) params.set("cursor", String(cursor));
+  return request<LinksPage>(`${API_BASE}/api/links?${params.toString()}`);
+}
+
+export function deleteLink(code: string): Promise<void> {
+  return request<void>(`${API_BASE}/api/links/${encodeURIComponent(code)}`, { method: "DELETE" });
 }

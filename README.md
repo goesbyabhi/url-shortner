@@ -43,6 +43,8 @@ and a **docker job** that proves both production images build.
 | POST   | `/api/shorten`        | `{url, customAlias?, expiresInSeconds?}`         | `201`   | `400` invalid input, `409` alias taken, `429` rate limited |
 | GET    | `/:code`              | —                                                | `302` redirect | `404` unknown, `410` expired |
 | GET    | `/api/stats/:code`    | —                                                | `200`   | `404` |
+| GET    | `/api/links`          | `?limit=20&cursor=`                              | `200`   | `400` bad cursor |
+| DELETE | `/api/links/:code`    | —                                                | `204`   | `404` |
 | GET    | `/api/health`         | —                                                | `200`   | `503` |
 
 Rate limiting applies only to `POST /api/shorten` — **30 requests / 60s / IP**,
@@ -149,10 +151,36 @@ per-day and referrer aggregations.
 
 ### 5. Reclaiming memory from unknown codes
 
-An attacker hammering random codes misses cache and Postgres every time
-(cache penetration). The standard answer is a **bloom filter** of live codes
-in front of the cache — not needed at demo scale, but it is the natural
-next hardening step.
+### 6. Listing links — and the one design smell
+
+`GET /api/links` returns every link, newest first. Two decisions worth defending:
+
+- **Keyset (cursor) pagination over the `bigserial id`, not `OFFSET`.** The cursor is the
+  last seen id (`WHERE id < $cursor ORDER BY id DESC LIMIT n+1`). New links can be inserted
+  between pages without shifting rows into or out of the next page, and page cost stays flat
+  instead of scanning-and-discarding `OFFSET` rows.
+- **Fetch `limit + 1` rows** to detect whether another page exists without a second query,
+  and **count the total only on the first page** — an unconditional `COUNT(*)` per page is an
+  O(n) scan on every request, trivial to abuse.
+
+**The smell:** the endpoint is unauthenticated, so anyone can enumerate every link ever
+created — a privacy and abuse problem, not a feature. At this scale it's a demo convenience
+(page size capped at 50, link metadata only, no click data). A real product must scope the
+query to the caller — an account id or API key on the `WHERE` clause — and nothing else
+about this design changes when you add that.
+
+Related smaller tradeoffs:
+
+- **Delete exists (`DELETE /api/links/:code`) and is the sharpest example of the auth
+  problem** — until it's account-scoped, anyone can destroy anyone else's link. One
+  implementation detail is not optional: deleting must invalidate the cache as well, or the
+  short code keeps redirecting until its TTL expires.
+- **Shortening the same URL twice creates two links.** Deliberate: it keeps `POST /api/shorten`
+  idempotent-free and stateless. A "return the existing code for an identical URL" lookup is
+  the alternative, at the cost of a hot-row lookup per write.
+- **Rate limiting covers writes only** (`POST /api/shorten`). Reads — redirects, stats, the
+  listing — are unmetered, which is the right default for a read-heavy shortener but does
+  leave the listing open to scraping. Account scoping (above) is the real fix.
 
 ---
 
@@ -279,26 +307,28 @@ url-shortner/
 ├─ client/              # Vite + React SPA (Geist, dark minimal UI)
 │  ├─ Dockerfile        # build → nginx (SPA + reverse proxy)
 │  ├─ nginx.conf        # serves the SPA, proxies /api and /:code
-│  └─ src/components/   # form, result, recents (localStorage), stats chart
+│  └─ src/components/   # form, result, links list (paginated), stats chart
 ├─ scripts/             # deploy.ps1 / deploy.sh, e2e.sh
 ├─ render.yaml           # free-tier cloud blueprint (Render)
 ├─ compose.prod.yml     # postgres + redis + api + nginx, health-gated
 └─ docker-compose.yml   # dev infra only (postgres + redis)
 ```
 
-Recent links live in `localStorage` — the demo has no user accounts by design.
+The link list is **server-backed** (`GET /api/links`, newest first, keyset paginated), so
+every shortened link is visible from any browser. There are no user accounts, which makes
+that endpoint the one genuine design smell in the project — see design decision #6.
 
 ---
 
 ## Verification
 
 - `npm run typecheck` passes for both workspaces; `npm test` covers the server libs
-- The end-to-end suite (`scripts/e2e.sh`, run in CI on every push) exercises:
-  shorten → redirect ×2 (cache hit) → stats (3 clicks recorded) →
-  custom alias (201) → duplicate alias (409) → alias redirect →
-  2s-expiry link (302 → `410` after deadline, row swept) →
-  invalid URL (400) → unknown code (404) → 40 rapid requests (rate limiter
-  trips with `429`)
+- The e2e suite (`scripts/e2e.sh` in CI, `scripts/e2e.ps1` on Windows) covers 23 checks:
+  shorten → redirect ×2 (cache hit) → stats (3 clicks recorded) → custom alias (201) →
+  duplicate alias (409) → alias redirect → 2s-expiry link (302 → `410` after deadline, row
+  swept) → invalid URL (400) → unknown code (404) → listing + keyset pagination (`total`
+  only on the first page, no page overlap, invalid cursor 400) → delete (302 → `204` → `404`,
+  gone from the listing, second delete 404) → 40 rapid requests (rate limiter trips with `429`)
 - The production images build cleanly in CI, and the stack was verified
   end-to-end through nginx before the first release
 

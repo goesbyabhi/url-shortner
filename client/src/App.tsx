@@ -1,26 +1,16 @@
 import { useState } from "react";
-import { RecentLinks } from "./components/RecentLinks";
+import { LinksList } from "./components/LinksList";
 import { ResultCard } from "./components/ResultCard";
 import { ShortenForm } from "./components/ShortenForm";
-import { StatsPanel } from "./components/StatsPanel";
-import { useRecents } from "./hooks/useRecents";
 import type { ShortenResponse } from "./types";
 
 export default function App() {
   const [result, setResult] = useState<ShortenResponse | null>(null);
-  const [statsCode, setStatsCode] = useState<string | null>(null);
-  const { recents, addRecent, removeRecent } = useRecents();
+  const [linksRefreshKey, setLinksRefreshKey] = useState(0);
 
   function handleSuccess(r: ShortenResponse) {
     setResult(r);
-    setStatsCode(null);
-    addRecent({
-      code: r.code,
-      shortUrl: r.shortUrl,
-      originalUrl: r.originalUrl,
-      createdAt: new Date().toISOString(),
-      expiresAt: r.expiresAt,
-    });
+    setLinksRefreshKey((k) => k + 1);
   }
 
   return (
@@ -44,20 +34,8 @@ export default function App() {
         </section>
 
         <section className="section">
-          <div className="section-head">
-            <h2>Recent</h2>
-            <span className="mono muted">
-              {recents.length}/10 · stored locally
-            </span>
-          </div>
-          <RecentLinks items={recents} onStats={setStatsCode} onRemove={removeRecent} />
+          <LinksList refreshKey={linksRefreshKey} />
         </section>
-
-        {statsCode && (
-          <section className="section">
-            <StatsPanel code={statsCode} onClose={() => setStatsCode(null)} />
-          </section>
-        )}
       </main>
 
       <footer className="site-footer">

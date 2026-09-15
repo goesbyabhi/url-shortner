@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getStats } from "../api";
-import { CloseIcon } from "../lib/icons";
+import { CloseIcon, RefreshIcon } from "../lib/icons";
 import { formatExpiry, referrerLabel, timeAgo, truncateMiddle } from "../lib/format";
 import type { LinkStats } from "../types";
 
@@ -26,6 +26,14 @@ function buildDays(byDay: { day: string; clicks: number }[]): { day: string; cli
 
 export function StatsPanel({ code, onClose }: { code: string; onClose: () => void }) {
   const [state, setState] = useState<State>({ phase: "loading" });
+  const [reloadKey, setReloadKey] = useState(0);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Expanding a row can push the panel below the fold — bring it into view,
+  // but only as far as needed: "nearest" avoids scroll-jacking the page.
+  useEffect(() => {
+    panelRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,15 +50,32 @@ export function StatsPanel({ code, onClose }: { code: string; onClose: () => voi
     return () => {
       cancelled = true;
     };
-  }, [code]);
+  }, [code, reloadKey]);
+
+  // Clicks happen in another tab; refetch when the user comes back.
+  useEffect(() => {
+    const onFocus = () => setReloadKey((k) => k + 1);
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
 
   return (
-    <div className="stats-panel">
+    <div className="stats-panel" ref={panelRef}>
       <div className="stats-head">
         <span className="stats-code">/{code}</span>
-        <button className="icon-btn" onClick={onClose} aria-label="Close stats">
-          <CloseIcon />
-        </button>
+        <span className="stats-actions">
+          <button
+            className="icon-btn"
+            onClick={() => setReloadKey((k) => k + 1)}
+            aria-label="Refresh stats"
+            title="Refresh"
+          >
+            <RefreshIcon />
+          </button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close stats">
+            <CloseIcon />
+          </button>
+        </span>
       </div>
 
       {state.phase === "loading" && (

@@ -8,6 +8,7 @@ import { sweepExpired } from "./db/links.js";
 import { redis } from "./redis/client.js";
 import { shortenRouter } from "./routes/shorten.js";
 import { statsRouter } from "./routes/stats.js";
+import { linksRouter } from "./routes/links.js";
 import { redirectRouter } from "./routes/redirect.js";
 
 const app = express();
@@ -34,6 +35,7 @@ app.get("/api/health", async (_req, res) => {
 
 app.use("/api", shortenRouter);
 app.use("/api", statsRouter);
+app.use("/api", linksRouter);
 
 // Unknown /api path — JSON 404 before the redirect catch-all sees it
 app.use("/api", (_req, res) => res.status(404).json({ error: "not found" }));
