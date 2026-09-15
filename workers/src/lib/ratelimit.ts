@@ -1,8 +1,8 @@
 import type { Context, Next } from "hono";
-import { num, type Env } from "../env";
+import { num, type AppEnv } from "../env";
 import type { RateVerdict } from "../ratelimit-do";
 
-type Ctx = Context<{ Bindings: Env }>;
+type Ctx = Context<AppEnv>;
 
 /**
  * Same fixed-window policy as the server (30 requests / 60s / IP), backed by a

@@ -1,13 +1,17 @@
 import { Hono } from "hono";
 import { randomCode, validateAlias, validateExpiresInSeconds, validateUrl } from "@snip/shared";
 import { codeExists, insertLink, withClient } from "../db";
+import { requireAuth } from "../lib/auth";
 import { setCachedLink } from "../lib/cache";
 import { rateLimitMiddleware } from "../lib/ratelimit";
-import { num, type Env } from "../env";
+import { num, type AppEnv } from "../env";
 
-export const shortenRoutes = new Hono<{ Bindings: Env }>();
+export const shortenRoutes = new Hono<AppEnv>();
 
-shortenRoutes.post("/shorten", rateLimitMiddleware, async (c) => {
+// Rate limit first (cheap Durable Object counter) so unauthenticated floods
+// don't reach the key lookup, then resolve the owner.
+shortenRoutes.post("/shorten", rateLimitMiddleware, requireAuth, async (c) => {
+  const ownerId = c.get("ownerId");
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 
   const url = validateUrl(body.url);
@@ -30,7 +34,7 @@ shortenRoutes.post("/shorten", rateLimitMiddleware, async (c) => {
     if (alias) {
       if (await codeExists(client, alias.alias)) return { kind: "conflict" as const };
       try {
-        await insertLink(client, { code: alias.alias, url: url.url, isCustom: true, expiresAt });
+        await insertLink(client, { code: alias.alias, url: url.url, isCustom: true, expiresAt, ownerId });
         return { kind: "ok" as const, code: alias.alias };
       } catch (err) {
         if (isUniqueViolation(err)) return { kind: "conflict" as const };
@@ -41,7 +45,7 @@ shortenRoutes.post("/shorten", rateLimitMiddleware, async (c) => {
     for (let attempt = 0; attempt < attempts; attempt++) {
       const code = randomCode(codeLength);
       try {
-        await insertLink(client, { code, url: url.url, isCustom: false, expiresAt });
+        await insertLink(client, { code, url: url.url, isCustom: false, expiresAt, ownerId });
         return { kind: "ok" as const, code };
       } catch (err) {
         if (!isUniqueViolation(err)) throw err;

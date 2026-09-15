@@ -18,3 +18,12 @@ export function num(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+/**
+ * Hono app type: bindings from wrangler, plus per-request variables.
+ * `ownerId` is set by requireAuth and read by owner-scoped routes.
+ */
+export type AppEnv = {
+  Bindings: Env;
+  Variables: { ownerId: number };
+};

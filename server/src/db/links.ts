@@ -14,13 +14,14 @@ export interface NewLink {
   url: string;
   isCustom: boolean;
   expiresAt: Date | null;
+  ownerId: number;
 }
 
 export async function insertLink(link: NewLink): Promise<void> {
   await query(
-    `INSERT INTO links (code, original_url, is_custom, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [link.code, link.url, link.isCustom, link.expiresAt]
+    `INSERT INTO links (code, original_url, is_custom, expires_at, owner_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [link.code, link.url, link.isCustom, link.expiresAt, link.ownerId]
   );
 }
 
@@ -29,14 +30,19 @@ export async function codeExists(code: string): Promise<boolean> {
   return r.rowCount === 1;
 }
 
+/** Public lookup used by the redirect path — a short link is shareable. */
 export async function getLinkByCode(code: string): Promise<LinkRow | null> {
   const r = await query("SELECT * FROM links WHERE code = $1", [code]);
   return (r.rows[0] as LinkRow | undefined) ?? null;
 }
 
-/** 409-style conflict check for custom aliases. */
-export async function getAliasOwner(code: string): Promise<LinkRow | null> {
-  const r = await query("SELECT * FROM links WHERE code = $1", [code]);
+/**
+ * Scoped lookup for owner-only operations (stats, delete). Returns null both
+ * when the link is missing and when it belongs to someone else, so callers
+ * answer 404 either way and never confirm that a code exists.
+ */
+export async function getOwnedLink(code: string, ownerId: number): Promise<LinkRow | null> {
+  const r = await query("SELECT * FROM links WHERE code = $1 AND owner_id = $2", [code, ownerId]);
   return (r.rows[0] as LinkRow | undefined) ?? null;
 }
 
@@ -62,8 +68,8 @@ export interface LinkStats {
   topReferrers: { referrer: string; clicks: number }[];
 }
 
-export async function getStats(code: string): Promise<LinkStats | null> {
-  const link = await getLinkByCode(code);
+export async function getStats(code: string, ownerId: number): Promise<LinkStats | null> {
+  const link = await getOwnedLink(code, ownerId);
   if (!link) return null;
 
   const [byDay, topReferrers] = await Promise.all([
@@ -101,12 +107,22 @@ export async function getStats(code: string): Promise<LinkStats | null> {
 }
 
 /**
- * Delete a link (its click_events cascade). Returns whether a row existed so
- * callers can tell 404 from a successful delete. Also used by the expiry path,
- * which ignores the result.
+ * Delete a link by code regardless of owner (its click_events cascade). Used by
+ * the expiry path, which must clean up whoever's link it is. Returns whether a
+ * row existed.
  */
 export async function deleteLink(code: string): Promise<boolean> {
   const r = await query("DELETE FROM links WHERE code = $1", [code]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * Owner-scoped delete for the API. Returns false when the link doesn't exist
+ * *or* isn't yours — the caller answers 404 either way, so the endpoint can't be
+ * used to probe which codes exist.
+ */
+export async function deleteOwnedLink(code: string, ownerId: number): Promise<boolean> {
+  const r = await query("DELETE FROM links WHERE code = $1 AND owner_id = $2", [code, ownerId]);
   return (r.rowCount ?? 0) > 0;
 }
 
@@ -142,16 +158,18 @@ interface ListRow {
 }
 
 /**
- * Keyset ("cursor") pagination over the bigserial id, newest first.
- * Preferred over OFFSET here: the id index gives a stable page even when new
- * links are inserted between requests, and cost doesn't grow with page depth.
+ * Keyset ("cursor") pagination over the bigserial id, newest first, scoped to
+ * the caller's links. Preferred over OFFSET here: the id index gives a stable
+ * page even when new links are inserted between requests, and cost doesn't grow
+ * with page depth. `idx_links_owner_id (owner_id, id DESC)` serves both the
+ * page query and the count.
  */
-export async function listLinks(limit: number, cursor: number | null): Promise<LinkPage> {
-  const params: unknown[] = [];
-  let where = "";
+export async function listLinks(limit: number, cursor: number | null, ownerId: number): Promise<LinkPage> {
+  const params: unknown[] = [ownerId];
+  let where = "WHERE owner_id = $1";
   if (cursor !== null) {
     params.push(cursor);
-    where = `WHERE id < $${params.length}`;
+    where += ` AND id < $${params.length}`;
   }
   params.push(limit + 1); // fetch one extra to detect a next page
 
@@ -165,7 +183,9 @@ export async function listLinks(limit: number, cursor: number | null): Promise<L
     ),
     // Count only on the first page: an unconditional COUNT(*) per page is an
     // O(n) scan on every request, trivial to abuse.
-    cursor === null ? query("SELECT count(*)::int AS total FROM links") : Promise.resolve(null),
+    cursor === null
+      ? query("SELECT count(*)::int AS total FROM links WHERE owner_id = $1", [ownerId])
+      : Promise.resolve(null),
   ]);
 
   const rows = page.rows as ListRow[];

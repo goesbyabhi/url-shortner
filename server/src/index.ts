@@ -9,6 +9,7 @@ import { redis } from "./redis/client.js";
 import { shortenRouter } from "./routes/shorten.js";
 import { statsRouter } from "./routes/stats.js";
 import { linksRouter } from "./routes/links.js";
+import { keysRouter } from "./routes/keys.js";
 import { redirectRouter } from "./routes/redirect.js";
 
 const app = express();
@@ -33,6 +34,7 @@ app.get("/api/health", async (_req, res) => {
   res.status(pgOk && redisOk ? 200 : 503).json({ status: "ok", pg: pgOk, redis: redisOk });
 });
 
+app.use("/api", keysRouter);
 app.use("/api", shortenRouter);
 app.use("/api", statsRouter);
 app.use("/api", linksRouter);

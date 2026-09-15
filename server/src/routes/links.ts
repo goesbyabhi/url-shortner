@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { isValidCode } from "@snip/shared";
 import { config } from "../config.js";
-import { deleteLink, listLinks } from "../db/links.js";
+import { deleteOwnedLink, listLinks } from "../db/links.js";
+import { requireAuth } from "../lib/auth.js";
 import { invalidateCachedLink } from "../lib/cache.js";
 
 export const linksRouter: Router = Router();
@@ -10,13 +11,11 @@ const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
 
 /**
- * GET /api/links?limit=&cursor= — newest first, keyset paginated.
- *
- * NOTE: unauthenticated, so in a real product this must be scoped to the caller
- * (API key / account) or it becomes a link-enumeration endpoint. The demo caps
- * the page size and exposes only link metadata, no click data.
+ * GET /api/links?limit=&cursor= — the caller's links, newest first, keyset
+ * paginated. Scoped to the API key that created them, so the endpoint is no
+ * longer a way to enumerate every link in the system.
  */
-linksRouter.get("/links", async (req, res, next) => {
+linksRouter.get("/links", requireAuth, async (req, res, next) => {
   try {
     const limitRaw = Number(req.query.limit ?? DEFAULT_LIMIT);
     const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), MAX_LIMIT) : DEFAULT_LIMIT;
@@ -31,7 +30,7 @@ linksRouter.get("/links", async (req, res, next) => {
       cursor = parsed;
     }
 
-    const page = await listLinks(limit, cursor);
+    const page = await listLinks(limit, cursor, req.ownerId!);
     return res.json({
       ...page,
       links: page.links.map((l) => ({ ...l, shortUrl: `${config.baseUrl}/${l.code}` })),
@@ -42,20 +41,20 @@ linksRouter.get("/links", async (req, res, next) => {
 });
 
 /**
- * DELETE /api/links/:code — remove a link and stop it resolving immediately.
+ * DELETE /api/links/:code — remove one of *your* links and stop it resolving.
  *
- * Cache invalidation is not optional: without it the short code keeps
- * redirecting from cache until its TTL expires.
- *
- * Unauthenticated, like the listing — in a real product this must sit behind
- * the same account scoping, or anyone can delete anyone's links.
+ * Two things are deliberate here:
+ * - a link owned by someone else answers 404, never 403, so the endpoint can't
+ *   be used to discover which codes exist
+ * - cache invalidation is not optional, or the short code keeps redirecting
+ *   until its TTL expires
  */
-linksRouter.delete("/links/:code", async (req, res, next) => {
+linksRouter.delete("/links/:code", requireAuth, async (req, res, next) => {
   try {
-    const code = req.params.code;
+    const code = req.params.code ?? "";
     if (!isValidCode(code)) return res.status(404).json({ error: "not found" });
 
-    const deleted = await deleteLink(code);
+    const deleted = await deleteOwnedLink(code, req.ownerId!);
     await invalidateCachedLink(code);
 
     if (!deleted) return res.status(404).json({ error: "no link found for that code" });

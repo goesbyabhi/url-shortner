@@ -29,13 +29,14 @@ export interface NewLink {
   url: string;
   isCustom: boolean;
   expiresAt: Date | null;
+  ownerId: number;
 }
 
 export async function insertLink(client: pg.Client, link: NewLink): Promise<void> {
   await client.query(
-    `INSERT INTO links (code, original_url, is_custom, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [link.code, link.url, link.isCustom, link.expiresAt]
+    `INSERT INTO links (code, original_url, is_custom, expires_at, owner_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [link.code, link.url, link.isCustom, link.expiresAt, link.ownerId]
   );
 }
 
@@ -44,8 +45,19 @@ export async function codeExists(client: pg.Client, code: string): Promise<boole
   return r.rowCount === 1;
 }
 
+/** Public lookup used by the redirect path — a short link is shareable. */
 export async function getLinkByCode(client: pg.Client, code: string): Promise<LinkRow | null> {
   const r = await client.query("SELECT * FROM links WHERE code = $1", [code]);
+  return (r.rows[0] as LinkRow | undefined) ?? null;
+}
+
+/**
+ * Scoped lookup for owner-only operations (stats, delete). Returns null both
+ * when the link is missing and when it belongs to someone else, so callers
+ * answer 404 either way and never confirm that a code exists.
+ */
+export async function getOwnedLink(client: pg.Client, code: string, ownerId: number): Promise<LinkRow | null> {
+  const r = await client.query("SELECT * FROM links WHERE code = $1 AND owner_id = $2", [code, ownerId]);
   return (r.rows[0] as LinkRow | undefined) ?? null;
 }
 
@@ -74,8 +86,8 @@ export interface LinkStats {
   topReferrers: { referrer: string; clicks: number }[];
 }
 
-export async function getStats(client: pg.Client, code: string): Promise<LinkStats | null> {
-  const link = await getLinkByCode(client, code);
+export async function getStats(client: pg.Client, code: string, ownerId: number): Promise<LinkStats | null> {
+  const link = await getOwnedLink(client, code, ownerId);
   if (!link) return null;
 
   const [byDay, topReferrers] = await Promise.all([
@@ -113,12 +125,21 @@ export async function getStats(client: pg.Client, code: string): Promise<LinkSta
 }
 
 /**
- * Delete a link (its click_events cascade). Returns whether a row existed so
- * callers can tell 404 from a successful delete. Also used by the expiry path,
- * which ignores the result.
+ * Delete a link by code regardless of owner (its click_events cascade). Used by
+ * the expiry path, which must clean up whoever's link it is.
  */
 export async function deleteLink(client: pg.Client, code: string): Promise<boolean> {
   const r = await client.query("DELETE FROM links WHERE code = $1", [code]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * Owner-scoped delete for the API. Returns false when the link doesn't exist
+ * *or* isn't yours — the caller answers 404 either way, so the endpoint can't be
+ * used to probe which codes exist.
+ */
+export async function deleteOwnedLink(client: pg.Client, code: string, ownerId: number): Promise<boolean> {
+  const r = await client.query("DELETE FROM links WHERE code = $1 AND owner_id = $2", [code, ownerId]);
   return (r.rowCount ?? 0) > 0;
 }
 
@@ -154,15 +175,21 @@ interface ListRow {
 }
 
 /**
- * Keyset pagination over the bigserial id — identical SQL to server/src/db/links.ts.
- * Stable under concurrent inserts and O(1) in page depth (unlike OFFSET).
+ * Keyset pagination over the bigserial id, scoped to the caller's links —
+ * identical SQL to server/src/db/links.ts. Stable under concurrent inserts and
+ * O(1) in page depth (unlike OFFSET).
  */
-export async function listLinks(client: pg.Client, limit: number, cursor: number | null): Promise<LinkPage> {
-  const params: unknown[] = [];
-  let where = "";
+export async function listLinks(
+  client: pg.Client,
+  limit: number,
+  cursor: number | null,
+  ownerId: number
+): Promise<LinkPage> {
+  const params: unknown[] = [ownerId];
+  let where = "WHERE owner_id = $1";
   if (cursor !== null) {
     params.push(cursor);
-    where = `WHERE id < $${params.length}`;
+    where += ` AND id < $${params.length}`;
   }
   params.push(limit + 1); // one extra row tells us whether another page exists
 
@@ -175,7 +202,10 @@ export async function listLinks(client: pg.Client, limit: number, cursor: number
   );
   // Count only on the first page: an unconditional COUNT(*) per page is an
   // O(n) scan on every request, trivial to abuse.
-  const totals = cursor === null ? await client.query("SELECT count(*)::int AS total FROM links") : null;
+  const totals =
+    cursor === null
+      ? await client.query("SELECT count(*)::int AS total FROM links WHERE owner_id = $1", [ownerId])
+      : null;
 
   const rows = page.rows as ListRow[];
   const hasMore = rows.length > limit;

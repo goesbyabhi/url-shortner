@@ -1,4 +1,5 @@
 export { decode, encode, randomCode } from "./base62.js";
+export { generateToken, hashToken } from "./token.js";
 export {
   isValidCode,
   validateAlias,

@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import type { Env } from "./env";
+import type { AppEnv, Env } from "./env";
 import { sweepExpired, withClient } from "./db";
 import { healthRoutes } from "./routes/health";
+import { keysRoutes } from "./routes/keys";
 import { shortenRoutes } from "./routes/shorten";
 import { statsRoutes } from "./routes/stats";
 import { linksRoutes } from "./routes/links";
@@ -9,9 +10,11 @@ import { redirectRoutes } from "./routes/redirect";
 
 export { RateLimiter } from "./ratelimit-do";
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<AppEnv>();
 
-// API — /api/shorten (rate-limited), /api/stats/:code, /api/health
+// API — /api/keys (rate-limited), /api/shorten (rate-limited + auth),
+// /api/stats/:code, /api/links (auth), /api/health
+app.route("/api", keysRoutes);
 app.route("/api", shortenRoutes);
 app.route("/api", statsRoutes);
 app.route("/api", linksRoutes);

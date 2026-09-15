@@ -175,28 +175,44 @@ Deployed snip-worker triggers (…)
 ```powershell
 $base = "https://snip-worker.<your-subdomain>.workers.dev"
 
-# 1. health — expect {"status":"ok","pg":true}
+# 1. health — expect {"status":"ok","pg":true} (public)
 curl.exe -s "$base/api/health"
 
-# 2. shorten — expect 201 + JSON with a 7-char code and a shortUrl on $base
-curl.exe -s -X POST "$base/api/shorten" -H "Content-Type: application/json" -d '{\"url\":\"https://example.com/hello\"}'
+# 2. get an API key — the token prints once; keep it for the calls below
+$token = (curl.exe -s -X POST "$base/api/keys" | ConvertFrom-Json).token
+$auth = "Authorization: Bearer $token"
 
-# 3. redirect — expect 302 and a Location header (run the GET, do not follow)
-curl.exe -s -D - -o NUL "$base/<code-from-step-2>"
+# 3. shorten — expect 201 + JSON with a 7-char code and a shortUrl on $base
+curl.exe -s -X POST "$base/api/shorten" -H $auth -H "Content-Type: application/json" -d '{\"url\":\"https://example.com/hello\"}'
 
-# 4. stats — expect totalClicks to have incremented
-curl.exe -s "$base/api/stats/<code-from-step-2>"
+# 4. redirect — expect 302 and a Location header (public; run the GET, do not follow)
+curl.exe -s -D - -o NUL "$base/<code-from-step-3>"
+
+# 5. your links — expect the link from step 3 (only your key sees it)
+curl.exe -s -H $auth "$base/api/links"
+
+# 6. stats — expect totalClicks to have incremented
+curl.exe -s -H $auth "$base/api/stats/<code-from-step-3>"
 ```
 
 Then open the root URL in a browser — the SPA should load, and shortening from the UI should
 work end to end.
 
+> **Auth:** shortening, listing, stats and delete all require `Authorization: Bearer <token>`.
+> The app mints an anonymous key on first use and keeps it in your browser's localStorage
+> under `snip:api_key`; only its SHA-256 hash is stored server-side. Redirects are public — a
+> short link is shareable — so opening `$base/<code>` needs no key. See design decision #7 in
+> [README.md](./README.md).
+
 **bash:**
 
 ```bash
 base="https://snip-worker.<your-subdomain>.workers.dev"
+token=$(curl -s -X POST "$base/api/keys" | sed 's/.*"token":"\([^"]*\)".*/\1/')
 curl -s "$base/api/health"
-curl -s -X POST "$base/api/shorten" -H 'Content-Type: application/json' -d '{"url":"https://example.com/hello"}'
+curl -s -X POST "$base/api/shorten" -H "Authorization: Bearer $token" \
+  -H 'Content-Type: application/json' -d '{"url":"https://example.com/hello"}'
+curl -s -H "Authorization: Bearer $token" "$base/api/links"
 ```
 
 ### Full automated check (optional)
@@ -208,7 +224,7 @@ lifecycle against a live origin:
 powershell -File scripts\e2e.ps1 -BaseUrl "https://snip-worker.<your-subdomain>.workers.dev"
 ```
 
-Expected: 14 `PASS` lines and `ALL CHECKS PASSED`.
+Expected: 31 `PASS` lines and `ALL CHECKS PASSED`.
 
 > The rate-limiter checks fire ~45 requests in a minute by design. If you run the suite and
 > then use the UI immediately, shorten may return `429` until the 60-second window rolls over.
