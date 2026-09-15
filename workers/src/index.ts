@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { AppEnv, Env } from "./env";
 import { sweepExpired, withClient } from "./db";
 import { healthRoutes } from "./routes/health";
@@ -11,6 +12,28 @@ import { redirectRoutes } from "./routes/redirect";
 export { RateLimiter } from "./ratelimit-do";
 
 const app = new Hono<AppEnv>();
+
+/**
+ * CORS for the API. Served same-origin by default (the Worker hosts the SPA), but
+ * a browser calling this API from another origin — Cloudflare Pages, a local Vite
+ * dev server, a mobile shell — needs this or every request dies in the browser
+ * while curl keeps working. Auth is a Bearer token in a header, not a cookie, so
+ * there are no ambient credentials to protect: default to "*", restrict with the
+ * CORS_ORIGIN var when you want to.
+ */
+app.use("/api/*", cors({
+  origin: (origin, c) => {
+    const allowed = (c.env.CORS_ORIGIN ?? "*")
+      .split(",")
+      .map((s: string) => s.trim())
+      .filter(Boolean);
+    if (allowed.includes("*")) return origin ?? "*";
+    return allowed.includes(origin ?? "") ? origin : "";
+  },
+  allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+  allowHeaders: ["Content-Type", "Authorization"],
+  maxAge: 86_400,
+}));
 
 // API — /api/keys (rate-limited), /api/shorten (rate-limited + auth),
 // /api/stats/:code, /api/links (auth), /api/health

@@ -9,4 +9,5 @@ Thumbs.db
 *.log
 .vite/
 .wrangler/
+*.local.ps1
 workers/.wrangler/

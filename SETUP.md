@@ -276,6 +276,7 @@ migrator tracks applied files in `schema_migrations`, so it's safe to run repeat
 | `client password must be a string` / auth error on `hyperdrive create` | Special characters in the password — URL-encode them (`@` → `%40`, `#` → `%23`). |
 | `429` on the first shorten | Rate limit is 30 requests / 60 s / IP. Wait a minute, or raise `RATE_LIMIT_MAX` in `workers/wrangler.jsonc` and redeploy. |
 | SPA loads but API calls fail | You deployed with `VITE_API_URL` set, or the Worker name changed without redeploying the client. Re-run `npm run deploy:workers` with no `VITE_API_URL` in the environment. |
+| curl works but the browser errors on every call | The browser is on a different origin than the Worker (`localhost:5173`, Cloudflare Pages, …) and CORS is blocking it. The Worker defaults `CORS_ORIGIN` to `*`; if you restricted it, add your origin in `workers/wrangler.jsonc` and redeploy. |
 | `wrangler deploy` says the name is taken | Rename `name` in `workers/wrangler.jsonc` (workers.dev names are globally unique). |
 | Local error `docker` / Postgres refused | Only relevant for local dev, not deployment. For local dev: `docker compose up -d` then `npm run dev:workers`. |
 

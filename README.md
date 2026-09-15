@@ -291,6 +291,11 @@ Notable design points:
   to the assets binding for SPA fallback.
 - **Shared domain core.** `shared/` owns base62, validation and migrations; the Express
   server imports it, the Worker imports it, and the unit tests cover both.
+- **CORS is explicit on the API.** Same-origin by default (the Worker serves the SPA), but if
+  a browser calls the API from elsewhere — Cloudflare Pages, a local dev server, a mobile
+  shell — requests die in the browser while curl keeps working. `CORS_ORIGIN` (default `*`,
+  comma-separated to restrict) drives it. Bearer tokens in headers, not cookies, mean there
+  are no ambient credentials for `*` to expose.
 
 ### Free-tier limits
 

@@ -11,6 +11,8 @@ export interface Env {
   CACHE_TTL_SEC: string;
   RATE_LIMIT_WINDOW_SEC: string;
   RATE_LIMIT_MAX: string;
+  /** Comma-separated allowlist for browser calls; "*" allows any origin */
+  CORS_ORIGIN: string;
 }
 
 /** Wrangler vars arrive as strings; parse with a fallback. */
