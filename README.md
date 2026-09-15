@@ -6,6 +6,10 @@ and rate limiting — plus a UI and a document explaining every tradeoff.
 
 **Stack:** Express (TypeScript) · PostgreSQL · Redis · React (Vite, TypeScript)
 
+The same domain logic runs on two runtimes: a **Node/Express server** with Redis, and a
+**Cloudflare Workers port** (Hono + Hyperdrive + Durable Objects) — see
+[the Workers port](#cloudflare-workers-port). Both are exercised by the same e2e suite in CI.
+
 [![CI](https://github.com/goesbyabhi/url-shortner/actions/workflows/ci.yml/badge.svg)](https://github.com/goesbyabhi/url-shortner/actions/workflows/ci.yml)
 
 ---
@@ -16,23 +20,30 @@ Requirements: Node 20+, Docker.
 
 ```bash
 docker compose up -d      # postgres + redis
-npm install               # installs both workspaces
-npm run dev               # api on :3000, web on :5173
+npm install               # installs all four workspaces
 ```
 
-Open **http://localhost:5173**. Short URLs resolve at `http://localhost:3000/:code`.
+Either runtime serves the same SPA against the same database — pick one:
 
 ```bash
-npm test                  # server unit tests (base62, validation)
-npm run typecheck         # both workspaces
-bash scripts/e2e.sh       # end-to-end suite against a running api (needs curl + jq)
+npm run dev               # Node/Express + Redis  → api :3000, web :5173
+npm run dev:workers       # Cloudflare Workers    → everything on :8787
 ```
 
-CI (`.github/workflows/ci.yml`) runs three jobs on every push/PR:
-**unit tests + typecheck + client build**, an **end-to-end job** that boots
-the API against real Postgres/Redis service containers and asserts the
-full lifecycle (shorten → 302s → stats → 409 → 410 → 400 → 404 → 429),
-and a **docker job** that proves both production images build.
+Open the web origin (`http://localhost:5173` for Express, `http://localhost:8787` for
+Workers). Short URLs resolve at `<origin>/:code`.
+
+```bash
+npm test                  # shared unit tests (base62, validation)
+npm run typecheck         # all four workspaces
+bash scripts/e2e.sh <url> # end-to-end suite against a running api (curl + jq)
+```
+
+CI (`.github/workflows/ci.yml`) runs four jobs on every push/PR: **unit tests +
+typecheck + client build**, **two end-to-end jobs** that boot each runtime against
+real Postgres (plus Redis for Express) and assert the full lifecycle
+(shorten → 302s → stats → 409 → 410 → 400 → 404 → 429), and a **docker job** that
+proves both production images build.
 
 ---
 
@@ -188,6 +199,79 @@ writes minimal (one insert, no synchronous analytics).
 
 ---
 
+## Cloudflare Workers port
+
+The `workers/` workspace is the same application — identical routes, status codes, response
+shapes, and SQL — rewritten for Cloudflare's runtime. Both runtimes run the *same* e2e suite
+in CI, so their behavior stays in lockstep.
+
+| Concern | `server/` (Node) | `workers/` (Cloudflare) |
+| --- | --- | --- |
+| HTTP framework | Express | Hono |
+| Postgres | `pg` pool | `pg` over **Hyperdrive** (pooled, query-cached) |
+| Link cache | Redis (`url:{code}`, one region) | **Cache API** (per data center, synthetic key) |
+| Rate limiting | Redis `INCR` fixed window | **Durable Object** — strongly consistent per-IP counter, alarm cleanup |
+| Analytics | un-awaited insert | `ctx.waitUntil()` — guaranteed post-response |
+| Expiry sweep | `setInterval` | **Cron Trigger** (`*/5 * * * *`) + `scheduled` handler |
+| SPA delivery | nginx container | **Workers Static Assets** (one Worker serves SPA + API + redirects) |
+| Short URL origin | `BASE_URL` env | the request's origin — workers.dev, custom domain, previews all work |
+
+Notable design points:
+
+- **The edge cache replaces Redis, not the redirect.** Clicks must stay observable, so the
+  302 is never cached; only the *link record* is cached under a synthetic key
+  (`cache.snip.internal/link/{code}`) with `s-maxage` set to the link's remaining lifetime,
+  so an expired link can never be served from cache.
+- **KV would be the obvious rate-limit store and the wrong one** — eventually consistent and
+  capped at ~1k writes/day on the free plan. A Durable Object gives one single-threaded
+  counter per IP, with an alarm that clears storage when the window closes (one write per
+  window, not per request).
+- **`run_worker_first = ["/*", "!/assets/*"]`** — hashed assets skip the Worker entirely
+  (edge-served, free); everything else invokes it, and non-API, non-code paths are delegated
+  to the assets binding for SPA fallback.
+- **Shared domain core.** `shared/` owns base62, validation and migrations; the Express
+  server imports it, the Worker imports it, and the unit tests cover both.
+
+### Free-tier limits
+
+| Service | Free allowance |
+| --- | --- |
+| Workers | 100k requests/day, 10 ms CPU per request |
+| Hyperdrive | 100k queries/day |
+| Durable Objects (SQLite) | 100k requests/day, 13k GB-s/day |
+| Static Assets | free, unmetered requests |
+| Cron Triggers | free |
+
+### Local development
+
+```bash
+docker compose up -d          # Postgres (the Worker reuses it; no Redis needed)
+npm run migrate -w server     # apply the shared migrations
+npm run dev:workers           # builds shared + client, then wrangler dev on :8787
+```
+
+`wrangler dev` runs the real workerd runtime with local Durable Object and Cache API
+emulation, pointed at docker Postgres through Hyperdrive's `localConnectionString` — no
+Cloudflare account needed. `npm run build -w workers` validates the bundle with a dry-run
+deploy (also account-free).
+
+### Deploy
+
+```bash
+npx wrangler login
+npx wrangler hyperdrive create snip-hd --connection-string="postgres://<neon-url>"
+# paste the printed id into workers/wrangler.jsonc, replacing REPLACE_WITH_HYPERDRIVE_ID
+
+npm run migrate -w server     # PGHOST/PGUSER/… PGSSL=true pointed at Neon
+npm run deploy:workers        # builds shared + client, then wrangler deploy
+```
+
+Live at `https://snip-worker.<your-subdomain>.workers.dev` — $0 on the free tier, and no
+second host to pay for. Add a custom domain in the dashboard to drop the workers.dev origin
+from the short URLs it stamps.
+
+---
+
 ## Deploy
 
 The repo ships a production stack: `compose.prod.yml` builds two images
@@ -268,19 +352,28 @@ and a fine stretch goal, but not a config change.
 
 ```
 url-shortner/
+├─ shared/              # domain core both runtimes import
+│  ├─ src/              # base62 codec, URL/alias validation (+ unit tests)
+│  └─ migrations/       # SQL migrations — single source of truth
 ├─ server/              # Express + TypeScript API
-│  ├─ migrations/       # SQL migrations (applied at boot)
 │  ├─ Dockerfile        # multi-stage: build → slim production image
 │  └─ src/
-│     ├─ lib/           # base62, validation, cache, rate limit, analytics
+│     ├─ lib/           # redis cache, rate limit, analytics (runtime-specific)
 │     ├─ routes/        # shorten, redirect (hot path), stats
-│     ├─ db/            # pg pool, migration runner, link queries
+│     ├─ db/            # pg pool, migration runner + CLI, link queries
 │     └─ redis/         # ioredis client
-├─ client/              # Vite + React SPA (Geist, dark minimal UI)
+├─ workers/             # Cloudflare Workers port
+│  ├─ wrangler.jsonc    # assets, Durable Object, Hyperdrive, cron
+│  └─ src/
+│     ├─ lib/           # edge cache, DO rate limit, waitUntil analytics
+│     ├─ routes/        # same routes as server, on Hono
+│     ├─ ratelimit-do.ts
+│     └─ index.ts       # fetch + scheduled handlers
+├─ client/              # Vite + React SPA (Geist, dark minimal UI) — shared by both
 │  ├─ Dockerfile        # build → nginx (SPA + reverse proxy)
 │  ├─ nginx.conf        # serves the SPA, proxies /api and /:code
 │  └─ src/components/   # form, result, recents (localStorage), stats chart
-├─ scripts/             # deploy.ps1 / deploy.sh, e2e.sh
+├─ scripts/             # deploy.ps1 / deploy.sh, e2e.sh, e2e.ps1
 ├─ render.yaml           # free-tier cloud blueprint (Render)
 ├─ compose.prod.yml     # postgres + redis + api + nginx, health-gated
 └─ docker-compose.yml   # dev infra only (postgres + redis)
@@ -292,15 +385,16 @@ Recent links live in `localStorage` — the demo has no user accounts by design.
 
 ## Verification
 
-- `npm run typecheck` passes for both workspaces; `npm test` covers the server libs
-- The end-to-end suite (`scripts/e2e.sh`, run in CI on every push) exercises:
-  shorten → redirect ×2 (cache hit) → stats (3 clicks recorded) →
+- `npm run typecheck` passes for all four workspaces; `npm test` covers the shared domain core
+- The e2e suite (`scripts/e2e.sh` in CI, `scripts/e2e.ps1` on Windows) runs against **both
+  runtimes** and exercises: shorten → redirect ×2 (cache hit) → stats (3 clicks recorded) →
   custom alias (201) → duplicate alias (409) → alias redirect →
-  2s-expiry link (302 → `410` after deadline, row swept) →
-  invalid URL (400) → unknown code (404) → 40 rapid requests (rate limiter
-  trips with `429`)
-- The production images build cleanly in CI, and the stack was verified
-  end-to-end through nginx before the first release
+  2s-expiry link (302 → `410` after deadline, row swept) → invalid URL (400) →
+  unknown code (404) → 40 rapid requests (rate limiter trips with `429`)
+- Both runtimes were verified locally end-to-end (Express on `:3000`, Workers on `:8787`)
+  and run as separate CI jobs on every push
+- The production images build cleanly in CI, and the Node stack was verified through nginx
+  in the full production compose stack
 
-Every number in this README is either a default in `server/src/config.ts`
-or derived in `server/src` — the code is the source of truth.
+Every number in this README is either a default in `server/src/config.ts` /
+`workers/wrangler.jsonc` or derived in the code — the code is the source of truth.

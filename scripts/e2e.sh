@@ -37,15 +37,16 @@ rc=1; [ "$total" -eq 3 ] && rc=0
 check "stats counted 3 clicks (got $total)" "$rc"
 
 # --- 4. custom alias + conflict ----------------------------------------------
+alias="my-repo-$(date +%s)"
 st=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/shorten" \
-  -H 'Content-Type: application/json' -d '{"url":"https://github.com/torvalds","customAlias":"my-repo"}')
+  -H 'Content-Type: application/json' -d "{\"url\":\"https://github.com/torvalds\",\"customAlias\":\"$alias\"}")
 rc=1; [ "$st" = "201" ] && rc=0
-check "custom alias created (my-repo)" "$rc"
+check "custom alias created ($alias)" "$rc"
 dup=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/api/shorten" \
-  -H 'Content-Type: application/json' -d '{"url":"https://github.com","customAlias":"my-repo"}')
+  -H 'Content-Type: application/json' -d "{\"url\":\"https://github.com\",\"customAlias\":\"$alias\"}")
 rc=1; [ "$dup" = "409" ] && rc=0
 check "duplicate alias rejected 409" "$rc"
-al=$(curl -s -o /dev/null -w '%{http_code}' "$base/my-repo")
+al=$(curl -s -o /dev/null -w '%{http_code}' "$base/$alias")
 rc=1; [ "$al" = "302" ] && rc=0
 check "alias redirect works" "$rc"
 

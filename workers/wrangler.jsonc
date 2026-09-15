@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "snip-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // One Worker serves the SPA, the API, and short-code redirects.
+  // Hashed assets under /assets/* skip the Worker entirely (no invocation bill);
+  // everything else invokes the Worker, which delegates non-API paths to ASSETS.
+  "assets": {
+    "directory": "../client/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/*", "!/assets/*"]
+  },
+
+  "durable_objects": {
+    "bindings": [{ "name": "RATE_LIMITER", "class_name": "RateLimiter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RateLimiter"] }],
+
+  // Local dev + CI connect straight to docker-compose Postgres via
+  // localConnectionString. To deploy, create a real Hyperdrive config and
+  // replace the placeholder "id" below with the value printed by:
+  //   npx wrangler hyperdrive create snip-hd --connection-string="postgres://…"
+  "hyperdrive": [
+    {
+      "binding": "HYPERDRIVE",
+      "id": "REPLACE_WITH_HYPERDRIVE_ID",
+      "localConnectionString": "postgres://shortener:shortener@localhost:5432/shortener"
+    }
+  ],
+
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
+  "vars": {
+    "CODE_LENGTH": "7",
+    "CODE_GEN_ATTEMPTS": "3",
+    "CACHE_TTL_SEC": "86400",
+    "RATE_LIMIT_WINDOW_SEC": "60",
+    "RATE_LIMIT_MAX": "30"
+  },
+
+  "observability": { "enabled": true }
+}

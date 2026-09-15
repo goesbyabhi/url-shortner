@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, cloudflare-workers]
   pull_request:
 
 jobs:
@@ -17,11 +17,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test -w server
+      - run: npm test
       - run: npm run build -w client
 
   e2e:
-    name: end-to-end (api + postgres + redis)
+    name: end-to-end — express (api + postgres + redis)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -53,6 +53,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm run build -w @snip/shared
       - run: npm run build -w server
       - name: Start API
         run: node server/dist/index.js > server.log 2>&1 &
@@ -67,6 +68,54 @@ jobs:
       - name: Server log on failure
         if: failure()
         run: cat server.log
+
+  workers:
+    name: end-to-end — cloudflare workers (wrangler dev)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: shortener
+          POSTGRES_PASSWORD: shortener
+          POSTGRES_DB: shortener
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U shortener"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w @snip/shared
+      - name: Migrate database (same migrator, pointed at the service container)
+        run: npm run migrate -w server
+      - run: npm run build -w client
+      - name: Validate the worker bundle (no account needed)
+        run: npm run build -w workers
+      - name: Start wrangler dev
+        working-directory: workers
+        env:
+          CI: "true"
+        run: |
+          npx wrangler dev --port 8787 > ../wrangler.log 2>&1 &
+      - name: Wait for worker
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8787/api/health && break
+            sleep 2
+          done
+          curl -sf http://localhost:8787/api/health
+      - run: bash scripts/e2e.sh http://localhost:8787
+      - name: Wrangler log on failure
+        if: failure()
+        run: cat wrangler.log
 
   docker:
     name: image builds

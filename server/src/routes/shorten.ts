@@ -1,10 +1,9 @@
 import { Router } from "express";
+import { randomCode, validateAlias, validateExpiresInSeconds, validateUrl } from "@snip/shared";
 import { config } from "../config.js";
 import { codeExists, insertLink } from "../db/links.js";
-import { randomCode } from "../lib/base62.js";
 import { setCachedLink } from "../lib/cache.js";
 import { rateLimitMiddleware } from "../lib/ratelimit.js";
-import { validateAlias, validateExpiresInSeconds, validateUrl } from "../lib/validate.js";
 
 export const shortenRouter: Router = Router();
 

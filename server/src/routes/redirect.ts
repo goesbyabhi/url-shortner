@@ -1,8 +1,8 @@
 import { Router } from "express";
+import { isValidCode } from "@snip/shared";
 import { getLinkByCode, deleteLink } from "../db/links.js";
 import { getCachedLink, invalidateCachedLink, setCachedLink } from "../lib/cache.js";
 import { recordClickAsync } from "../lib/analytics.js";
-import { isValidCode } from "../lib/validate.js";
 
 export const redirectRouter: Router = Router();
 

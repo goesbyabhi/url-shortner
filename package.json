@@ -2,17 +2,23 @@
   "name": "url-shortener",
   "version": "1.0.0",
   "private": true,
-  "description": "URL shortener — system design demo (Express, Postgres, Redis, React)",
+  "description": "URL shortener — system design demo (Express + Redis, and a Cloudflare Workers port)",
   "workspaces": [
+    "shared",
     "server",
-    "client"
+    "client",
+    "workers"
   ],
   "scripts": {
-    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev": "npm run build -w @snip/shared && concurrently -n api,web -c cyan,magenta \"npm run dev -w server\" \"npm run dev -w client\"",
+    "dev:workers": "npm run build -w @snip/shared && npm run build -w client && npm run dev -w workers",
+    "build": "npm run build -ws",
+    "deploy:workers": "npm run build -w @snip/shared && npm run build -w client && npm run deploy -w workers",
     "compose": "docker compose up -d",
     "compose:down": "docker compose down",
-    "test": "npm run test -w server",
-    "typecheck": "npm run typecheck -w server && npm run typecheck -w client"
+    "test": "npm run test -w @snip/shared",
+    "typecheck": "npm run build -w @snip/shared && npm run typecheck -ws",
+    "e2e": "bash scripts/e2e.sh"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

@@ -1,0 +1,23 @@
+{
+  "name": "workers",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@snip/shared": "1.0.0",
+    "hono": "^4.6.20",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "@types/pg": "^8.11.10",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.0.0"
+  }
+}

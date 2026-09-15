@@ -1,9 +1,12 @@
 import { readdir, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pool } from "./pool.js";
 
-const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../migrations");
+const require = createRequire(import.meta.url);
+const sharedDir = dirname(require.resolve("@snip/shared/package.json"));
+const MIGRATIONS_DIR = join(sharedDir, "migrations");
 
 /** Applies pending .sql migrations once, tracked via schema_migrations. */
 export async function runMigrations(): Promise<string[]> {
