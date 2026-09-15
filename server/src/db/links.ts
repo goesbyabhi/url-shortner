@@ -110,3 +110,72 @@ export async function sweepExpired(): Promise<number> {
   const r = await query("DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at < now()");
   return r.rowCount ?? 0;
 }
+
+export interface LinkSummary {
+  code: string;
+  originalUrl: string;
+  createdAt: string;
+  expiresAt: string | null;
+  clicks: number;
+}
+
+export interface LinkPage {
+  links: LinkSummary[];
+  /** Pass back as ?cursor= to fetch the next page; null when exhausted */
+  nextCursor: number | null;
+  /** Total link count — only computed on the first page (null afterwards) */
+  total: number | null;
+}
+
+interface ListRow {
+  id: string;
+  code: string;
+  original_url: string;
+  expires_at: Date | null;
+  click_count: string;
+  created_at: Date;
+}
+
+/**
+ * Keyset ("cursor") pagination over the bigserial id, newest first.
+ * Preferred over OFFSET here: the id index gives a stable page even when new
+ * links are inserted between requests, and cost doesn't grow with page depth.
+ */
+export async function listLinks(limit: number, cursor: number | null): Promise<LinkPage> {
+  const params: unknown[] = [];
+  let where = "";
+  if (cursor !== null) {
+    params.push(cursor);
+    where = `WHERE id < $${params.length}`;
+  }
+  params.push(limit + 1); // fetch one extra to detect a next page
+
+  const [page, totals] = await Promise.all([
+    query(
+      `SELECT id, code, original_url, expires_at, click_count, created_at
+       FROM links ${where}
+       ORDER BY id DESC
+       LIMIT $${params.length}`,
+      params
+    ),
+    // Count only on the first page: an unconditional COUNT(*) per page is an
+    // O(n) scan on every request, trivial to abuse.
+    cursor === null ? query("SELECT count(*)::int AS total FROM links") : Promise.resolve(null),
+  ]);
+
+  const rows = page.rows as ListRow[];
+  const hasMore = rows.length > limit;
+  const visible = hasMore ? rows.slice(0, limit) : rows;
+
+  return {
+    links: visible.map((r) => ({
+      code: r.code,
+      originalUrl: r.original_url,
+      createdAt: r.created_at.toISOString(),
+      expiresAt: r.expires_at?.toISOString() ?? null,
+      clicks: Number(r.click_count),
+    })),
+    nextCursor: hasMore ? Number(visible[visible.length - 1]!.id) : null,
+    total: totals ? (totals.rows[0]?.total as number) : null,
+  };
+}

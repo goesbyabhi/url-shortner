@@ -63,5 +63,21 @@ for ($i = 0; $i -lt 40; $i++) {
 }
 Check "rate limiter trips (429 seen $seen)" ($seen -gt 0)
 
+# --- 9. link listing + keyset pagination -------------------------------------
+$listing = curl.exe -s "$base/api/links?limit=5" | ConvertFrom-Json
+Check "GET /api/links returns a page (n=$($listing.links.Count) of $($listing.total))" ($listing.links.Count -ge 1 -and $listing.links.Count -le 5 -and $listing.total -ge $listing.links.Count)
+$firstCode = $listing.links[0].code
+Check "newest link is first ($firstCode)" ($null -ne $firstCode)
+
+if ($null -ne $listing.nextCursor) {
+  $page2 = curl.exe -s "$base/api/links?limit=5&cursor=$($listing.nextCursor)" | ConvertFrom-Json
+  Check "cursor pagination returns the next page (n=$($page2.links.Count))" ($page2.links.Count -ge 1)
+  $overlap = @($page2.links | Where-Object { $_.code -eq $firstCode }).Count
+  Check "pages do not overlap" ($overlap -eq 0)
+}
+
+$badCursor = curl.exe -s -o NUL -w "%{http_code}" "$base/api/links?cursor=abc"
+Check "invalid cursor rejected 400" ($badCursor -eq '400')
+
 Write-Output ""
 if ($fail -eq 0) { Write-Output "ALL CHECKS PASSED"; exit 0 } else { Write-Output "$fail CHECK(S) FAILED"; exit 1 }

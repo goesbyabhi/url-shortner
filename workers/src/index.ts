@@ -4,6 +4,7 @@ import { sweepExpired, withClient } from "./db";
 import { healthRoutes } from "./routes/health";
 import { shortenRoutes } from "./routes/shorten";
 import { statsRoutes } from "./routes/stats";
+import { linksRoutes } from "./routes/links";
 import { redirectRoutes } from "./routes/redirect";
 
 export { RateLimiter } from "./ratelimit-do";
@@ -13,6 +14,7 @@ const app = new Hono<{ Bindings: Env }>();
 // API — /api/shorten (rate-limited), /api/stats/:code, /api/health
 app.route("/api", shortenRoutes);
 app.route("/api", statsRoutes);
+app.route("/api", linksRoutes);
 app.route("/api", healthRoutes);
 
 // Unknown /api paths are JSON 404s (never the SPA fallback)

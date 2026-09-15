@@ -491,6 +491,51 @@ select.field {
   font-size: 13px;
 }
 
+.list-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.list-footer {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0 4px;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.btn-ghost:hover {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--border-strong);
+}
+
+.btn-ghost:active {
+  transform: scale(0.98);
+}
+
+.btn-ghost[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* ————————————————————————————— stats ————————————————————————————— */
 
 .stats-panel {
@@ -506,6 +551,11 @@ select.field {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 20px;
+}
+
+.stats-actions {
+  display: inline-flex;
+  gap: 4px;
 }
 
 .stats-code {
@@ -656,6 +706,11 @@ select.field {
 
 .skeleton.chart-block {
   height: 150px;
+}
+
+.skeleton.list-block {
+  height: 160px;
+  border-radius: var(--radius);
 }
 
 /* ————————————————————————————— responsive ————————————————————————————— */

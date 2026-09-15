@@ -81,6 +81,30 @@ done
 rc=1; [ "$seen" -gt 0 ] && rc=0
 check "rate limiter trips (429 seen x$seen)" "$rc"
 
+# --- 9. link listing + keyset pagination --------------------------------------
+listing=$(curl -s "$base/api/links?limit=5")
+listed=$(echo "$listing" | jq -r '.links | length')
+total=$(echo "$listing" | jq -r '.total')
+first_code=$(echo "$listing" | jq -r '.links[0].code')
+rc=1; { [ "$listed" -ge 1 ] && [ "$listed" -le 5 ] && [ "$total" -ge "$listed" ]; } && rc=0
+check "GET /api/links returns a page (n=$listed of $total)" "$rc"
+rc=1; [ -n "$first_code" ] && [ "$first_code" != "null" ] && rc=0
+check "newest link is first ($first_code)" "$rc"
+
+cursor=$(echo "$listing" | jq -r '.nextCursor')
+if [ "$cursor" != "null" ]; then
+  page2=$(curl -s "$base/api/links?limit=5&cursor=$cursor" | jq -r '.links | length')
+  rc=1; [ "$page2" -ge 1 ] && rc=0
+  check "cursor pagination returns the next page (n=$page2)" "$rc"
+  overlap=$(curl -s "$base/api/links?limit=5&cursor=$cursor" | jq -r --arg c "$first_code" '[.links[].code | select(. == $c)] | length')
+  rc=1; [ "$overlap" -eq 0 ] && rc=0
+  check "pages do not overlap" "$rc"
+fi
+
+bad_cursor=$(curl -s -o /dev/null -w '%{http_code}' "$base/api/links?cursor=abc")
+rc=1; [ "$bad_cursor" = "400" ] && rc=0
+check "invalid cursor rejected 400" "$rc"
+
 echo ""
 if [ "$fail" -eq 0 ]; then
   echo "ALL CHECKS PASSED"
