@@ -11,3 +11,4 @@ Thumbs.db
 .wrangler/
 *.local.ps1
 workers/.wrangler/
+session-ses_*.md
